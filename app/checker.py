@@ -12,6 +12,8 @@ import whois
 
 from app.config import settings
 from app.models import AvailabilityStatus, DomainResult
+from app.registries import TldRegistry, registry_for_tld
+from app.whois_socket import query_registry_whois
 
 IANA_BOOTSTRAP_URL = settings.rdap_bootstrap_url
 
@@ -59,11 +61,20 @@ class DomainChecker:
 
     async def _check_one(self, domain: str) -> DomainResult:
         async with self._semaphore:
-            rdap_result = await self._check_rdap(domain)
+            registry = self._registry_for_domain(domain)
+
+            rdap_result = await self._check_rdap(domain, registry)
             if rdap_result.status != AvailabilityStatus.UNKNOWN:
                 return rdap_result
 
-            whois_result = await asyncio.to_thread(self._check_whois, domain)
+            if registry and registry.whois_host:
+                socket_result = await asyncio.to_thread(
+                    self._check_socket_whois, domain, registry
+                )
+                if socket_result.status != AvailabilityStatus.UNKNOWN:
+                    return socket_result
+
+            whois_result = await asyncio.to_thread(self._check_whois, domain, registry)
             return whois_result
 
     def _normalize(self, domain: str) -> str:
@@ -101,7 +112,10 @@ class DomainChecker:
             return ""
         return extracted.suffix.lower()
 
-    async def _check_rdap(self, domain: str) -> DomainResult:
+    def _registry_for_domain(self, domain: str) -> TldRegistry | None:
+        return registry_for_tld(self._tld(domain))
+
+    async def _check_rdap(self, domain: str, registry: TldRegistry | None) -> DomainResult:
         tld = self._tld(domain)
         if not tld:
             return DomainResult(
@@ -123,7 +137,11 @@ class DomainChecker:
                 message=f"RDAP bootstrap failed: {exc}",
             )
 
-        servers = bootstrap.get(tld, [])
+        servers = list(bootstrap.get(tld, []))
+        if registry and registry.rdap_urls:
+            override = [_RdapServer(base_url=url.rstrip("/")) for url in registry.rdap_urls]
+            servers = override + servers
+
         if not servers:
             return DomainResult(
                 domain=domain,
@@ -191,12 +209,31 @@ class DomainChecker:
             message=last_error or "RDAP lookup inconclusive",
         )
 
-    def _check_whois(self, domain: str) -> DomainResult:
+    def _check_socket_whois(self, domain: str, registry: TldRegistry) -> DomainResult:
+        try:
+            raw_text = query_registry_whois(domain, registry)
+        except OSError as exc:
+            return DomainResult(
+                domain=domain,
+                status=AvailabilityStatus.UNKNOWN,
+                available=False,
+                method="whois-registry",
+                message=f"Registry WHOIS error: {exc}",
+            )
+
+        return _parse_whois_text(
+            domain=domain,
+            raw_text=raw_text,
+            method="whois-registry",
+            registry=registry,
+        )
+
+    def _check_whois(self, domain: str, registry: TldRegistry | None) -> DomainResult:
         try:
             record = whois.whois(domain)
         except Exception as exc:
             text = str(exc).lower()
-            if AVAILABLE_PATTERNS.search(text):
+            if _matches_available(text, registry):
                 return DomainResult(
                     domain=domain,
                     status=AvailabilityStatus.AVAILABLE,
@@ -213,36 +250,15 @@ class DomainChecker:
             )
 
         raw_text = _whois_to_text(record)
-        if UNAVAILABLE_PATTERNS.search(raw_text):
-            return DomainResult(
-                domain=domain,
-                status=AvailabilityStatus.UNAVAILABLE,
-                available=False,
-                method="whois",
-                message="Domain is reserved or restricted",
-            )
-
-        if _is_whois_registered(record, raw_text):
-            registrar = _first_str(_record_field(record, "registrar"))
-            expiry = _format_date(_record_field(record, "expiration_date"))
-            return DomainResult(
-                domain=domain,
-                status=AvailabilityStatus.REGISTERED,
-                available=False,
-                method="whois",
-                registrar=registrar,
-                expiry_date=expiry,
-                message="Domain is registered",
-            )
-
-        if AVAILABLE_PATTERNS.search(raw_text):
-            return DomainResult(
-                domain=domain,
-                status=AvailabilityStatus.AVAILABLE,
-                available=True,
-                method="whois",
-                message="Domain appears available (WHOIS)",
-            )
+        parsed = _parse_whois_text(
+            domain=domain,
+            raw_text=raw_text,
+            method="whois",
+            registry=registry,
+            record=record,
+        )
+        if parsed.status != AvailabilityStatus.UNKNOWN:
+            return parsed
 
         return DomainResult(
             domain=domain,
@@ -251,6 +267,76 @@ class DomainChecker:
             method="whois",
             message="WHOIS lookup inconclusive",
         )
+
+
+def _extra_available_regex(registry: TldRegistry | None) -> re.Pattern[str] | None:
+    if not registry or not registry.extra_available_patterns:
+        return None
+    combined = "|".join(f"(?:{p})" for p in registry.extra_available_patterns)
+    return re.compile(combined, re.IGNORECASE)
+
+
+def _matches_available(text: str, registry: TldRegistry | None) -> bool:
+    if AVAILABLE_PATTERNS.search(text):
+        return True
+    extra = _extra_available_regex(registry)
+    return bool(extra and extra.search(text))
+
+
+def _parse_whois_text(
+    domain: str,
+    raw_text: str,
+    method: str,
+    registry: TldRegistry | None = None,
+    record: Any = None,
+) -> DomainResult:
+    if UNAVAILABLE_PATTERNS.search(raw_text):
+        return DomainResult(
+            domain=domain,
+            status=AvailabilityStatus.UNAVAILABLE,
+            available=False,
+            method=method,
+            message="Domain is reserved or restricted",
+        )
+
+    if record is not None and _is_whois_registered(record, raw_text):
+        registrar = _first_str(_record_field(record, "registrar"))
+        expiry = _format_date(_record_field(record, "expiration_date"))
+        return DomainResult(
+            domain=domain,
+            status=AvailabilityStatus.REGISTERED,
+            available=False,
+            method=method,
+            registrar=registrar,
+            expiry_date=expiry,
+            message="Domain is registered",
+        )
+
+    if REGISTERED_PATTERNS.search(raw_text) and not _matches_available(raw_text, registry):
+        return DomainResult(
+            domain=domain,
+            status=AvailabilityStatus.REGISTERED,
+            available=False,
+            method=method,
+            message="Domain is registered",
+        )
+
+    if _matches_available(raw_text, registry):
+        return DomainResult(
+            domain=domain,
+            status=AvailabilityStatus.AVAILABLE,
+            available=True,
+            method=method,
+            message="Domain appears available (WHOIS)",
+        )
+
+    return DomainResult(
+        domain=domain,
+        status=AvailabilityStatus.UNKNOWN,
+        available=False,
+        method=method,
+        message="WHOIS lookup inconclusive",
+    )
 
 
 def _parse_rdap_registration(payload: dict[str, Any]) -> tuple[str | None, str | None]:

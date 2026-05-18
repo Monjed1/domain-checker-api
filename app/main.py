@@ -6,7 +6,7 @@ from app.models import DomainCheckRequest, DomainCheckResponse, DomainResult, He
 
 app = FastAPI(
     title="Domain Availability API",
-    description="Check if domains are available using RDAP (primary) and WHOIS (fallback).",
+    description="Check domain availability (.com, .it, .de, .fr, and many more) via RDAP and registry WHOIS.",
     version="1.0.0",
 )
 
@@ -22,6 +22,16 @@ def verify_api_key(x_api_key: str | None = Header(default=None)) -> None:
 @app.get("/health", response_model=HealthResponse)
 async def health() -> HealthResponse:
     return HealthResponse(status="ok")
+
+
+@app.get("/supported-tlds")
+async def supported_tlds() -> dict[str, list[str]]:
+    from app.registries import TLD_REGISTRIES
+
+    return {
+        "registry_whois": sorted(TLD_REGISTRIES.keys()),
+        "note": "Many other TLDs (.com, .net, .org, etc.) work via IANA RDAP bootstrap.",
+    }
 
 
 @app.post("/check", response_model=DomainCheckResponse, dependencies=[Depends(verify_api_key)])
