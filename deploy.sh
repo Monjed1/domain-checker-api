@@ -13,6 +13,6 @@ docker compose pull 2>/dev/null || true
 docker compose build --no-cache
 docker compose up -d
 
-echo "API running on port 8000"
-echo "Health: curl http://127.0.0.1:8000/health"
-echo "Docs:   http://YOUR_SERVER_IP:8000/docs"
+echo "API running on port 8585"
+echo "Health: curl http://127.0.0.1:8585/health"
+echo "Docs:   http://YOUR_SERVER_IP:8585/docs"

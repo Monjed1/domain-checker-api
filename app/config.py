@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     max_concurrent_checks: int = 10
     rdap_bootstrap_url: str = "https://data.iana.org/rdap/dns.json"
     host: str = "0.0.0.0"
-    port: int = 8000
+    port: int = 8585
 
 
 settings = Settings()

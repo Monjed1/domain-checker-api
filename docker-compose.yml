@@ -4,9 +4,9 @@ services:
     container_name: domain-checker-api
     restart: unless-stopped
     ports:
-      - "8000:8000"
+      - "8585:8585"
     env_file:
       - .env
     environment:
       - HOST=0.0.0.0
-      - PORT=8000
+      - PORT=8585
