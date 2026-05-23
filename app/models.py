@@ -52,6 +52,8 @@ class WaybackInfo(BaseModel):
     risk_flags: list[str] = Field(default_factory=list)
     risk_level: RiskLevel = RiskLevel.NONE
     sample_urls: list[str] = Field(default_factory=list)
+    lookup_status: str = "unknown"  # ok | not_found | partial | rate_limited | error
+    rate_limited: bool = False
     source: str = "internet_archive_cdx"
     note: str | None = None
 

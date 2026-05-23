@@ -1,13 +1,10 @@
 from __future__ import annotations
 
 import re
+from typing import Any
 
-import httpx
-
-from app.config import settings
+from app.enrichment.wayback_client import fetch_availability, fetch_cdx
 from app.models import RiskLevel, WaybackInfo
-
-CDX_URL = "https://web.archive.org/cdx/search/cdx"
 
 _RISK_PATTERNS: dict[str, re.Pattern[str]] = {
     "adult": re.compile(
@@ -31,38 +28,78 @@ _BUSINESS_PATH = re.compile(
 
 
 async def analyze_wayback(domain: str) -> WaybackInfo:
-    """Query Internet Archive public CDX index (no API key)."""
-    params = {
-        "url": f"{domain}/*",
-        "output": "json",
-        "fl": "timestamp,original,statuscode,mimetype",
-        "filter": "statuscode:200",
-        "collapse": "urlkey",
-        "limit": 80,
-    }
+    rows, error = await fetch_cdx(domain)
 
-    try:
-        async with httpx.AsyncClient(
-            timeout=settings.request_timeout_seconds,
-            follow_redirects=True,
-        ) as client:
-            response = await client.get(CDX_URL, params=params)
-            response.raise_for_status()
-            rows = response.json()
-    except httpx.HTTPError as exc:
+    if error and "429" in error:
+        fallback = await _availability_fallback(domain, error)
+        if fallback is not None:
+            return fallback
+
+    if error:
+        is_rate_limited = "429" in error or "Rate limited" in error
         return WaybackInfo(
             was_archived=False,
+            lookup_status="rate_limited" if is_rate_limited else "error",
+            rate_limited=is_rate_limited,
             source="internet_archive_cdx",
-            note=f"Wayback CDX lookup failed: {exc}",
+            note=(
+                f"Wayback lookup failed: {error}. "
+                "Wait a few minutes, increase WAYBACK_MIN_INTERVAL_SECONDS, "
+                "or check fewer domains per request."
+            ),
         )
 
     if not rows or len(rows) < 2:
         return WaybackInfo(
             was_archived=False,
+            lookup_status="not_found",
             source="internet_archive_cdx",
             note="No archived snapshots found in Wayback Machine.",
         )
 
+    return _build_from_cdx_rows(rows)
+
+
+async def _availability_fallback(domain: str, cdx_error: str) -> WaybackInfo | None:
+    data, avail_error = await fetch_availability(domain)
+    if avail_error or not isinstance(data, dict):
+        return None
+
+    archived = data.get("archived_snapshots") or {}
+    closest = archived.get("closest") if isinstance(archived, dict) else None
+    if not isinstance(closest, dict) or not closest.get("available"):
+        return WaybackInfo(
+            was_archived=False,
+            lookup_status="not_found",
+            source="internet_archive_availability",
+            note=(
+                "CDX rate-limited; availability API shows no snapshots. "
+                f"CDX error: {cdx_error}"
+            ),
+        )
+
+    timestamp = str(closest.get("timestamp", ""))
+    first_seen = _format_ts(timestamp) if timestamp else None
+
+    return WaybackInfo(
+        was_archived=True,
+        snapshot_count=1,
+        first_seen=first_seen,
+        last_seen=first_seen,
+        likely_real_business=False,
+        risk_flags=[],
+        risk_level=RiskLevel.NONE,
+        sample_urls=[str(closest.get("url", ""))] if closest.get("url") else [],
+        lookup_status="partial",
+        source="internet_archive_availability",
+        note=(
+            "CDX rate-limited (429); used lightweight availability API. "
+            "Counts and risk analysis may be incomplete — retry later for full CDX data."
+        ),
+    )
+
+
+def _build_from_cdx_rows(rows: list[Any]) -> WaybackInfo:
     headers = rows[0]
     data_rows = rows[1:]
     snapshots = [_row_to_dict(headers, row) for row in data_rows]
@@ -94,6 +131,7 @@ async def analyze_wayback(domain: str) -> WaybackInfo:
         risk_flags=risk_flags,
         risk_level=_overall_risk(risk_flags),
         sample_urls=originals[:8],
+        lookup_status="ok",
         source="internet_archive_cdx",
         note="Heuristic analysis from public CDX metadata only (not full page content).",
     )
