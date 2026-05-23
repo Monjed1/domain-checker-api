@@ -6,7 +6,7 @@ class Settings(BaseSettings):
 
     api_key: str | None = None
     max_domains_per_request: int = 50
-    request_timeout_seconds: float = 12.0
+    request_timeout_seconds: float = 20.0
     max_concurrent_checks: int = 10
     rdap_bootstrap_url: str = "https://data.iana.org/rdap/dns.json"
     host: str = "0.0.0.0"

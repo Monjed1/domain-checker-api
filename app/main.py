@@ -6,8 +6,12 @@ from app.models import DomainCheckRequest, DomainCheckResponse, DomainResult, He
 
 app = FastAPI(
     title="Domain Availability API",
-    description="Check domain availability (.com, .it, .de, .fr, and many more) via RDAP and registry WHOIS.",
-    version="1.0.0",
+    description=(
+        "Check domain availability plus protocol-based analysis: "
+        "RDAP/WHOIS registration, live DNS, Internet Archive CDX (Wayback), "
+        "and limited homepage probe. No paid SEO APIs."
+    ),
+    version="2.0.0",
 )
 
 
@@ -34,6 +38,55 @@ async def supported_tlds() -> dict[str, list[str]]:
     }
 
 
+@app.get("/analysis-capabilities")
+async def analysis_capabilities() -> dict:
+    return {
+        "registration": {
+            "source": "RDAP / WHOIS (registry protocols)",
+            "fields": [
+                "is_registered",
+                "creation_date",
+                "expiration_date",
+                "registrar",
+                "domain_statuses",
+                "drop_status",
+                "was_registered_before",
+                "domain_age_days",
+                "domain_age_years",
+                "domain_age_human",
+                "age_source",
+            ],
+        },
+        "wayback": {
+            "source": "Internet Archive public CDX (no API key)",
+            "fields": [
+                "was_archived",
+                "snapshot_count",
+                "first_seen",
+                "last_seen",
+                "likely_real_business",
+                "risk_flags (adult/gambling/pharma/spam heuristics)",
+            ],
+        },
+        "dns": {
+            "source": "Live DNS (dnspython)",
+            "fields": [
+                "a_records",
+                "mx_hosts",
+                "ns_hosts",
+                "likely_parked",
+                "had_live_hosting",
+                "inferred_historical_hosting (with Wayback)",
+            ],
+            "limit": "No paid DNS-history database — current DNS + Wayback inference only.",
+        },
+        "backlinks": {
+            "source": "Homepage HTTP probe only",
+            "limit": "Real inbound backlink index requires Ahrefs/Moz/etc. Not included.",
+        },
+    }
+
+
 @app.post("/check", response_model=DomainCheckResponse, dependencies=[Depends(verify_api_key)])
 async def check_domains(body: DomainCheckRequest) -> DomainCheckResponse:
     if len(body.domains) > settings.max_domains_per_request:
@@ -42,19 +95,23 @@ async def check_domains(body: DomainCheckRequest) -> DomainCheckResponse:
             detail=f"Maximum {settings.max_domains_per_request} domains per request",
         )
 
-    results = await checker.check_many(body.domains)
+    results = await checker.check_many(body.domains, enrich=body.enrich)
     return DomainCheckResponse(results=results, checked=len(results))
 
 
 @app.get("/check/{domain}", response_model=DomainResult, dependencies=[Depends(verify_api_key)])
-async def check_single_domain(domain: str) -> DomainResult:
-    results = await checker.check_many([domain])
+async def check_single_domain(
+    domain: str,
+    enrich: bool = Query(True, description="Include full domain analysis"),
+) -> DomainResult:
+    results = await checker.check_many([domain], enrich=enrich)
     return results[0]
 
 
 @app.get("/check", response_model=DomainCheckResponse, dependencies=[Depends(verify_api_key)])
 async def check_domains_query(
-    domains: str = Query(..., description="Comma-separated domain names, e.g. example.com,test.io"),
+    domains: str = Query(..., description="Comma-separated domain names"),
+    enrich: bool = Query(True, description="Include full domain analysis"),
 ) -> DomainCheckResponse:
     domain_list = [d.strip() for d in domains.split(",") if d.strip()]
     if not domain_list:
@@ -66,5 +123,5 @@ async def check_domains_query(
             detail=f"Maximum {settings.max_domains_per_request} domains per request",
         )
 
-    results = await checker.check_many(domain_list)
+    results = await checker.check_many(domain_list, enrich=enrich)
     return DomainCheckResponse(results=results, checked=len(results))
