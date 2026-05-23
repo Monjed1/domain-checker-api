@@ -20,13 +20,6 @@ class DropStatus(str, Enum):
     UNKNOWN = "unknown"
 
 
-class RiskLevel(str, Enum):
-    NONE = "none"
-    LOW = "low"
-    MEDIUM = "medium"
-    HIGH = "high"
-
-
 class RegistrationInfo(BaseModel):
     is_registered: bool
     creation_date: str | None = None
@@ -39,23 +32,7 @@ class RegistrationInfo(BaseModel):
     domain_age_years: float | None = None
     domain_age_human: str | None = None
     age_source: str | None = None
-    first_seen_date: str | None = None
     age_note: str | None = None
-
-
-class WaybackInfo(BaseModel):
-    was_archived: bool = False
-    snapshot_count: int = 0
-    first_seen: str | None = None
-    last_seen: str | None = None
-    likely_real_business: bool = False
-    risk_flags: list[str] = Field(default_factory=list)
-    risk_level: RiskLevel = RiskLevel.NONE
-    sample_urls: list[str] = Field(default_factory=list)
-    lookup_status: str = "unknown"  # ok | not_found | partial | rate_limited | error
-    rate_limited: bool = False
-    source: str = "internet_archive_cdx"
-    note: str | None = None
 
 
 class BacklinkInfo(BaseModel):
@@ -78,15 +55,12 @@ class DnsHistoryInfo(BaseModel):
     likely_parked: bool = False
     had_live_hosting: bool = False
     had_email_setup: bool = False
-    inferred_historical_hosting: bool = False
-    likely_spam_or_parked_history: bool = False
     note: str | None = None
     lookup_errors: list[str] = Field(default_factory=list)
 
 
 class DomainAnalysis(BaseModel):
     registration: RegistrationInfo
-    wayback: WaybackInfo
     backlinks: BacklinkInfo
     dns: DnsHistoryInfo
 
@@ -95,7 +69,7 @@ class DomainCheckRequest(BaseModel):
     domains: list[str] = Field(..., min_length=1, description="Domain names to check")
     enrich: bool = Field(
         True,
-        description="Include registration, Wayback, DNS, and backlink probe analysis",
+        description="Include registration, DNS, and backlink probe analysis",
     )
 
     @field_validator("domains")
@@ -130,4 +104,4 @@ class DomainCheckResponse(BaseModel):
 
 class HealthResponse(BaseModel):
     status: str
-    version: str = "2.0.0"
+    version: str = "2.1.0"

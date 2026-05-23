@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from app.models import RegistrationInfo, WaybackInfo
+from app.models import RegistrationInfo
 
 
 def parse_date(value: str | None) -> date | None:
@@ -52,11 +52,8 @@ def age_years_from_days(days: int) -> float:
     return round(days / 365.25, 1)
 
 
-def enrich_registration_age(
-    registration: RegistrationInfo,
-    wayback: WaybackInfo | None,
-) -> RegistrationInfo:
-    """Set domain age from registry creation date, or approximate from Wayback if dropped."""
+def enrich_registration_age(registration: RegistrationInfo) -> RegistrationInfo:
+    """Set domain age from registry creation date when currently registered."""
     if registration.is_registered and registration.creation_date:
         start = parse_date(registration.creation_date)
         if start:
@@ -68,32 +65,6 @@ def enrich_registration_age(
                     "domain_age_years": age_years_from_days(days),
                     "domain_age_human": format_age_human(days),
                     "age_source": "registry_creation_date",
-                }
-            )
-
-    if (
-        not registration.is_registered
-        and wayback
-        and wayback.was_archived
-        and wayback.first_seen
-    ):
-        start = parse_date(wayback.first_seen)
-        end = parse_date(wayback.last_seen) if wayback.last_seen else date.today()
-        if start:
-            days = compute_age_days(start, end)
-            note = (
-                "Approximate age from Wayback first archive date "
-                "(not exact registration date)."
-            )
-            return registration.model_copy(
-                update={
-                    "was_registered_before": True,
-                    "domain_age_days": days,
-                    "domain_age_years": age_years_from_days(days),
-                    "domain_age_human": format_age_human(days),
-                    "age_source": "wayback_approximate",
-                    "first_seen_date": wayback.first_seen,
-                    "age_note": note,
                 }
             )
 

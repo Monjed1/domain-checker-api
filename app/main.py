@@ -8,10 +8,10 @@ app = FastAPI(
     title="Domain Availability API",
     description=(
         "Check domain availability plus protocol-based analysis: "
-        "RDAP/WHOIS registration, live DNS, Internet Archive CDX (Wayback), "
-        "and limited homepage probe. No paid SEO APIs."
+        "RDAP/WHOIS registration, live DNS, and limited homepage probe. "
+        "No paid SEO APIs."
     ),
-    version="2.0.0",
+    version="2.1.0",
 )
 
 
@@ -57,17 +57,6 @@ async def analysis_capabilities() -> dict:
                 "age_source",
             ],
         },
-        "wayback": {
-            "source": "Internet Archive public CDX (no API key)",
-            "fields": [
-                "was_archived",
-                "snapshot_count",
-                "first_seen",
-                "last_seen",
-                "likely_real_business",
-                "risk_flags (adult/gambling/pharma/spam heuristics)",
-            ],
-        },
         "dns": {
             "source": "Live DNS (dnspython)",
             "fields": [
@@ -76,9 +65,8 @@ async def analysis_capabilities() -> dict:
                 "ns_hosts",
                 "likely_parked",
                 "had_live_hosting",
-                "inferred_historical_hosting (with Wayback)",
             ],
-            "limit": "No paid DNS-history database — current DNS + Wayback inference only.",
+            "limit": "No paid DNS-history database — current DNS only.",
         },
         "backlinks": {
             "source": "Homepage HTTP probe only",

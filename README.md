@@ -1,11 +1,11 @@
 # Domain Checker API
 
-A self-hosted **FastAPI** service that checks whether domain names are available to register, with deep enrichment: **RDAP/WHOIS**, **live DNS**, **Internet Archive (Wayback)**, and **domain age** — without paid SEO or registrar APIs.
+A self-hosted **FastAPI** service that checks whether domain names are available to register, with enrichment: **RDAP/WHOIS**, **live DNS**, and **domain age** — without paid SEO or registrar APIs.
 
 Designed to run on a **VPS** (Docker) and integrate with automation tools like **n8n**.
 
 **Default port:** `8585`  
-**API version:** `2.0.0`
+**API version:** `2.1.0`
 
 ---
 
@@ -20,7 +20,6 @@ Designed to run on a **VPS** (Docker) and integrate with automation tools like *
 - [API reference](#api-reference)
 - [Response format](#response-format)
 - [Status values](#status-values)
-- [Wayback rate limits (429)](#wayback-rate-limits-429)
 - [n8n integration](#n8n-integration)
 - [GitHub + VPS deployment](#github--vps-deployment)
 - [HTTPS with Nginx](#https-with-nginx)
@@ -46,15 +45,13 @@ Designed to run on a **VPS** (Docker) and integrate with automation tools like *
 | Module | Source | What you get |
 |--------|--------|----------------|
 | **Registration** | RDAP / WHOIS | Registered?, creation/expiry, registrar, EPP statuses, **drop status**, **domain age** |
-| **Wayback** | Internet Archive CDX (public, no API key) | Was it used before?, snapshot count, first/last seen, business heuristic, risk flags |
 | **DNS** | Live DNS (`dnspython`) | A/AAAA/MX/NS/TXT/CNAME, parking detection, live hosting signals |
 | **Backlinks** | Homepage HTTP probe only | **Not** a real backlink index — see [Limitations](#limitations) |
 
 ### Domain age
 
 - **Currently registered:** age from registry `creation_date` (exact).
-- **Available but used before:** approximate age from Wayback `first_seen` (with `age_note`).
-- **Never used:** `was_registered_before: false`, age fields `null`.
+- **Available / not registered:** `was_registered_before: false`, age fields `null`.
 
 Top-level fields for easy filtering: `domain_age_days`, `domain_age_years`, `domain_age_human`, `was_registered_before`.
 
@@ -69,7 +66,6 @@ Request → Normalize domain
        → If unknown: Generic WHOIS
        → If enrich=true:
             ├── Parse registration + drop status + age
-            ├── Wayback CDX (throttled, cached, retries)
             ├── Live DNS lookup
             └── Optional homepage probe (outbound links only)
        → JSON response
@@ -123,7 +119,7 @@ curl http://127.0.0.1:8585/health
 Expected:
 
 ```json
-{"status":"ok","version":"2.0.0"}
+{"status":"ok","version":"2.1.0"}
 ```
 
 ### Test a domain check
@@ -176,11 +172,6 @@ All settings are loaded from environment variables (or `.env`).
 | `MAX_DOMAINS_PER_REQUEST` | `50` | Max domains per single API call. |
 | `REQUEST_TIMEOUT_SECONDS` | `20` | HTTP/socket timeout for lookups. |
 | `MAX_CONCURRENT_CHECKS` | `10` | Parallel domain checks (RDAP/WHOIS). |
-| `WAYBACK_MIN_INTERVAL_SECONDS` | `2` | Minimum delay between Internet Archive requests (reduces 429). |
-| `WAYBACK_MAX_RETRIES` | `4` | Retries on 429 / 5xx from Archive.org. |
-| `WAYBACK_RETRY_BASE_SECONDS` | `5` | Base delay for exponential backoff. |
-| `WAYBACK_CACHE_TTL_SECONDS` | `3600` | Cache Wayback results per domain (seconds). |
-| `WAYBACK_CDX_LIMIT` | `25` | Max CDX rows per domain (lower = gentler on Archive.org). |
 
 ### Recommended production `.env`
 
@@ -190,11 +181,6 @@ PORT=8585
 MAX_DOMAINS_PER_REQUEST=25
 REQUEST_TIMEOUT_SECONDS=20
 MAX_CONCURRENT_CHECKS=8
-WAYBACK_MIN_INTERVAL_SECONDS=3
-WAYBACK_MAX_RETRIES=4
-WAYBACK_RETRY_BASE_SECONDS=8
-WAYBACK_CACHE_TTL_SECONDS=3600
-WAYBACK_CDX_LIMIT=25
 ```
 
 ---
@@ -304,7 +290,7 @@ curl "http://127.0.0.1:8585/check/example.it" \
 | `registrar` | string \| null | Registrar name if registered |
 | `creation_date` | string \| null | `YYYY-MM-DD` |
 | `expiry_date` | string \| null | `YYYY-MM-DD` |
-| `was_registered_before` | boolean | Registered now or seen in Wayback |
+| `was_registered_before` | boolean | `true` if currently registered |
 | `domain_age_days` | int \| null | Age in days |
 | `domain_age_years` | float \| null | Age in years (e.g. `12.4`) |
 | `domain_age_human` | string \| null | e.g. `"12 years, 4 months"` |
@@ -320,26 +306,9 @@ curl "http://127.0.0.1:8585/check/example.it" \
 | `registrar` | Registrar name |
 | `domain_statuses` | EPP status strings |
 | `drop_status` | `active`, `pending_delete`, `redemption_period`, `not_registered`, … |
-| `was_registered_before` | Includes historical (Wayback) signal |
+| `was_registered_before` | `true` when currently registered |
 | `domain_age_*` | Same as top-level age fields |
-| `age_source` | `registry_creation_date` or `wayback_approximate` |
-| `age_note` | Explains approximate age when not from registry |
-
-### `analysis.wayback`
-
-| Field | Description |
-|-------|-------------|
-| `was_archived` | Found in Wayback Machine |
-| `snapshot_count` | Approximate unique captures |
-| `first_seen` / `last_seen` | `YYYY-MM-DD` |
-| `likely_real_business` | Heuristic (snapshots + `/about`, `/contact`, etc.) |
-| `risk_flags` | e.g. `adult`, `gambling`, `pharma`, `spam` (URL keyword heuristics) |
-| `risk_level` | `none`, `medium`, `high` |
-| `lookup_status` | `ok`, `not_found`, `partial`, `rate_limited`, `error` |
-| `rate_limited` | `true` if Archive.org returned 429 |
-| `note` | Details or error message |
-
-> **Important:** If `rate_limited` is `true`, `was_archived: false` does **not** mean the domain was never used — only that Wayback could not be queried. Retry later.
+| `age_source` | `registry_creation_date` when registered |
 
 ### `analysis.dns`
 
@@ -349,7 +318,6 @@ curl "http://127.0.0.1:8585/check/example.it" \
 | `likely_parked` | SEDO, Bodis, “for sale”, etc. |
 | `had_live_hosting` | Has records and not parked |
 | `had_email_setup` | Has MX records |
-| `inferred_historical_hosting` | Combined with Wayback signal |
 
 ### `analysis.backlinks`
 
@@ -384,27 +352,6 @@ curl "http://127.0.0.1:8585/check/example.it" \
 
 ---
 
-## Wayback rate limits (429)
-
-Internet Archive may return **HTTP 429** if too many CDX requests are sent at once (common with bulk n8n workflows).
-
-**Built-in mitigations:**
-
-- Global throttle between Wayback requests
-- Retries with exponential backoff
-- Per-domain cache (1 hour default)
-- Smaller CDX `limit`
-- Fallback to lightweight **availability API** when CDX is rate-limited (`lookup_status: partial`)
-
-**What you should do:**
-
-1. Set `WAYBACK_MIN_INTERVAL_SECONDS=3` (or higher) in `.env`
-2. Check **≤10 domains per request** in n8n, or use a Loop with delays
-3. Retry domains where `analysis.wayback.rate_limited === true`
-4. Do not treat `was_archived: false` as “clean history” when `rate_limited` is `true`
-
----
-
 ## n8n integration
 
 ### Basic flow
@@ -435,17 +382,8 @@ Each item is one domain with all fields.
 
 Optional quality filters:
 
-- `{{ $json.analysis.wayback.risk_flags.length }}` equals `0`
 - `{{ $json.analysis.dns.likely_parked }}` is false
 - `{{ $json.domain_age_years }}` ≥ `5`
-
-### Filter after rate limit
-
-Exclude inconclusive Wayback:
-
-- `{{ $json.analysis.wayback.rate_limited }}` is false  
-
-Or retry those in a separate workflow.
 
 ### Code node (filter available in one step)
 
@@ -556,8 +494,6 @@ domain-checker-api/
 │       ├── pipeline.py      # Runs all enrichment modules
 │       ├── registration.py  # Parse RDAP/WHOIS registration
 │       ├── age.py           # Domain age calculation
-│       ├── wayback.py         # Wayback analysis
-│       ├── wayback_client.py  # Throttle, retry, cache
 │       ├── dns_lookup.py    # Live DNS + parking heuristics
 │       └── backlinks.py     # Homepage probe (limited)
 ├── nginx/
@@ -580,10 +516,8 @@ domain-checker-api/
 | Registration dates / registrar | **Yes** — when registry returns data |
 | Drop / lifecycle status | **Partial** — from EPP status strings |
 | Domain age (registered) | **Yes** — from creation date |
-| Domain age (dropped) | **Approximate** — from Wayback first seen |
-| Wayback / prior use | **Yes** — Internet Archive public CDX (rate limited) |
-| Spam/adult/gambling heuristics | **Partial** — URL keyword heuristics only |
-| Full DNS **history** | **No** — live DNS only (+ Wayback inference) |
+| Domain age (available domains) | **No** — only for currently registered names |
+| Full DNS **history** | **No** — live DNS only |
 | Real **inbound backlink** index | **No** — requires Ahrefs, Moz, Majestic, etc. |
 | 100% purchase guarantee | **No** — always confirm at your registrar before paying |
 
@@ -596,8 +530,7 @@ domain-checker-api/
 | `401 Unauthorized` | Set `X-API-Key` header to match `API_KEY` in `.env` |
 | Connection refused | Open port 8585 on VPS + cloud firewall; confirm `docker ps` |
 | `.it` / ccTLD `unknown` | Ensure latest code is deployed; check `GET /supported-tlds` |
-| Wayback `429` / `rate_limited` | Increase `WAYBACK_MIN_INTERVAL_SECONDS`; fewer domains per request; retry later |
-| Slow bulk checks | Normal: Wayback is throttled (~2–3 s per domain); use `enrich: false` for speed |
+| Slow bulk checks | Use `enrich: false` for faster availability-only checks |
 | `unknown` availability | Registry timeout or unsupported TLD; retry or check manually |
 
 ### Logs (Docker)
@@ -633,12 +566,6 @@ docker logs -f domain-checker-api
       "drop_status": "active",
       "age_source": "registry_creation_date"
     },
-    "wayback": {
-      "was_archived": true,
-      "snapshot_count": 25,
-      "lookup_status": "ok",
-      "rate_limited": false
-    },
     "dns": {
       "resolves": true,
       "had_live_hosting": true,
@@ -663,31 +590,6 @@ docker logs -f domain-checker-api
   "was_registered_before": false,
   "domain_age_days": null,
   "message": "Domain is not registered (RDAP 404)"
-}
-```
-
-### Available but used before (dropped / expired)
-
-```json
-{
-  "domain": "old-brand.it",
-  "status": "available",
-  "available": true,
-  "was_registered_before": true,
-  "domain_age_years": 6.0,
-  "domain_age_human": "6 years, 0 months",
-  "analysis": {
-    "registration": {
-      "is_registered": false,
-      "age_source": "wayback_approximate",
-      "age_note": "Approximate age from Wayback first archive date (not exact registration date)."
-    },
-    "wayback": {
-      "was_archived": true,
-      "first_seen": "2018-04-12",
-      "lookup_status": "ok"
-    }
-  }
 }
 ```
 

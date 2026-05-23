@@ -74,9 +74,7 @@ async def analyze_dns(domain: str) -> DnsHistoryInfo:
         likely_parked=is_parked,
         had_live_hosting=had_hosting and not is_parked,
         had_email_setup=had_email,
-        note=(
-            "Live DNS only (no paid DNS-history API). Historical hosting inferred from Wayback when available."
-        ),
+        note="Live DNS only (no paid DNS-history API).",
         lookup_errors=errors,
     )
 
